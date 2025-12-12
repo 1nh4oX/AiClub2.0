@@ -1,24 +1,11 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect } from 'react';
 import { motion, useScroll, useTransform, useSpring } from 'framer-motion';
 
-const ParticleNetwork = () => {
+const ParticleNetwork = ({ viewMode }) => {
     const canvasRef = useRef(null);
     const { scrollYProgress } = useScroll();
-    
-    // 滚动时保留一些背景，不完全消失（从1到0.25），并增加模糊
-    const rawOpacity = useTransform(scrollYProgress, [0, 0.5], [1, 0.25]);
-    const rawScale = useTransform(scrollYProgress, [0, 0.5], [1, 1.15]); 
-    const rawFilter = useTransform(scrollYProgress, [0, 0.5], ["blur(0px)", "blur(8px)"]);
-    
-    const opacity = useSpring(rawOpacity, { stiffness: 60, damping: 20 });
-    const scale = useSpring(rawScale, { stiffness: 60, damping: 20 });
-    
-    // 添加初始淡入动画状态
-    const [mounted, setMounted] = useState(false);
-    
-    useEffect(() => {
-        setMounted(true);
-    }, []);
+    const opacity = useTransform(scrollYProgress, [0, 0.5], [1, 0.1]);
+    const springOpacity = useSpring(opacity, { stiffness: 50, damping: 20 });
 
     useEffect(() => {
         const canvas = canvasRef.current;
@@ -26,144 +13,187 @@ const ParticleNetwork = () => {
         let width, height;
         let particles = [];
         let animationFrameId;
+        let mouseX = 0;
+        let mouseY = 0;
+        let targetRotationX = 0;
+        let targetRotationY = 0;
+
+        const startTime = Date.now();
 
         const resize = () => {
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
         };
 
-        class Particle {
+        class Node {
             constructor() {
-                this.x = Math.random() * width;
-                this.y = Math.random() * height;
-                this.vx = (Math.random() - 0.5) * 0.4; // 减慢速度，更稳定
-                this.vy = (Math.random() - 0.5) * 0.4;
-                this.size = Math.random() * 2.5 + 1.5; // 稍大的粒子
-                this.id = Math.random(); // 固定ID，用于颜色判断
+                this.theta = Math.random() * Math.PI * 2;
+                this.phi = Math.acos((Math.random() * 2) - 1);
+
+                this.currentRadius = Math.random() * 2000 + 1000;
+                this.targetBaseRadius = Math.min(window.innerWidth, window.innerHeight) * 0.38;
+
+                this.x = 0;
+                this.y = 0;
+                this.z = 0;
+
+                this.baseSize = Math.random() * 2.0 + 0.5;
+
+                // Random offset for warp speed effect
+                this.warpFactor = Math.random() * 0.5 + 0.5;
             }
 
-            update() {
-                this.x += this.vx;
-                this.y += this.vy;
-                if (this.x < 0 || this.x > width) this.vx *= -1;
-                if (this.y < 0 || this.y > height) this.vy *= -1;
+            update(rotationX, rotationY, viewMode, timeElapsed) {
+                let targetRadius = this.targetBaseRadius;
+
+                if (viewMode === 'chat') {
+                    // WARP MODE: Rapid expansion with slight randomness
+                    targetRadius = Math.min(width, height) * 4.0;
+                    this.currentRadius += (targetRadius - this.currentRadius) * (0.1 * this.warpFactor);
+                } else {
+                    // HOME MODE: Stable
+                    this.currentRadius += (targetRadius - this.currentRadius) * 0.05;
+                }
+
+                let tx = this.currentRadius * Math.sin(this.phi) * Math.cos(this.theta);
+                let ty = this.currentRadius * Math.sin(this.phi) * Math.sin(this.theta);
+                let tz = this.currentRadius * Math.cos(this.phi);
+
+                // Rotation
+                let rotY_Actual = rotationY;
+                if (viewMode === 'chat') {
+                    // Add extra spin during warp
+                    rotY_Actual += timeElapsed * 0.002;
+                }
+
+                let x1 = tx * Math.cos(rotY_Actual) - tz * Math.sin(rotY_Actual);
+                let z1 = tx * Math.sin(rotY_Actual) + tz * Math.cos(rotY_Actual);
+
+                let y2 = ty * Math.cos(rotationX) - z1 * Math.sin(rotationX);
+                let z2 = ty * Math.sin(rotationX) + z1 * Math.cos(rotationX);
+
+                let cx = width * 0.7;
+                let cy = height * 0.5;
+
+                if (viewMode === 'chat') {
+                    const targetCx = width * 0.5;
+                    cx += (targetCx - cx) * 0.1;
+                }
+
+                this.x = cx + x1;
+                this.y = cy + y2;
+                this.z = z2;
             }
 
-            draw() {
-                ctx.fillStyle = `rgba(165, 180, 252, 0.7)`;
+            draw(ctx, viewMode) {
+                const scale = (this.z + this.currentRadius * 2) / (this.currentRadius * 3);
+                const alphaBase = Math.max(0.1, (this.z + this.currentRadius) / (this.currentRadius * 2));
+
+                // In chat mode, don't fade out completely, keep them as background stars
+                const finalAlpha = viewMode === 'chat' ? alphaBase * 0.5 : alphaBase;
+
                 ctx.beginPath();
-                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.arc(this.x, this.y, this.baseSize * scale, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(200, 240, 255, ${finalAlpha})`;
                 ctx.fill();
+
+                if (finalAlpha > 0.6) {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.baseSize * scale * 3, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(34, 211, 238, ${finalAlpha * 0.4})`;
+                    ctx.fill();
+                }
             }
         }
 
         const initParticles = () => {
             particles = [];
-            // 增加粒子数量，让几何图形更密集
-            const count = Math.min(Math.floor(window.innerWidth / 6), 180); 
+            const count = 280;
             for (let i = 0; i < count; i++) {
-                particles.push(new Particle());
+                particles.push(new Node());
             }
         };
 
+        const onMouseMove = (e) => {
+            mouseX = (e.clientX - width / 2) * 0.0005;
+            mouseY = (e.clientY - height / 2) * 0.0005;
+        };
+
+        let autoRotate = 0;
+
         const animate = () => {
             ctx.clearRect(0, 0, width, height);
-            
-            // 存储所有三角形
-            const triangles = [];
-            
-            // --- 核心算法：三角网格构建 ---
-            for (let i = 0; i < particles.length; i++) {
-                for (let j = i + 1; j < particles.length; j++) {
-                    const dx = particles[i].x - particles[j].x;
-                    const dy = particles[i].y - particles[j].y;
-                    const dist = Math.sqrt(dx * dx + dy * dy);
 
-                    // 1. 增大连接距离，让几何图形更大
-                    if (dist < 200) {
-                        ctx.strokeStyle = `rgba(99, 102, 241, ${0.2 - dist/1200})`; 
-                        ctx.lineWidth = 0.7;
-                        ctx.beginPath();
-                        ctx.moveTo(particles[i].x, particles[i].y);
-                        ctx.lineTo(particles[j].x, particles[j].y);
-                        ctx.stroke();
+            const timeElapsed = Date.now() - startTime;
 
-                        // 2. 增大三角形形成距离
-                        if (dist < 180) {
-                            for (let k = j + 1; k < particles.length; k++) {
-                                const dx2 = particles[j].x - particles[k].x;
-                                const dy2 = particles[j].y - particles[k].y;
-                                const dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-                                
-                                const dx3 = particles[i].x - particles[k].x;
-                                const dy3 = particles[i].y - particles[k].y;
-                                const dist3 = Math.sqrt(dx3 * dx3 + dy3 * dy3);
+            targetRotationY += (mouseX - targetRotationY) * 0.05;
+            targetRotationX += (mouseY - targetRotationX) * 0.05;
 
-                                if (dist2 < 180 && dist3 < 180) {
-                                    // 计算三角形面积
-                                    const area = Math.abs(
-                                        (particles[j].x - particles[i].x) * (particles[k].y - particles[i].y) -
-                                        (particles[k].x - particles[i].x) * (particles[j].y - particles[i].y)
-                                    ) / 2;
-                                    
-                                    // 使用粒子ID的组合作为固定种子，避免频闪
-                                    const seed = particles[i].id + particles[j].id + particles[k].id;
-                                    
-                                    triangles.push({
-                                        points: [particles[i], particles[j], particles[k]],
-                                        area: area,
-                                        avgDist: (dist + dist2 + dist3) / 3,
-                                        seed: seed
-                                    });
+            // Base rotation speed
+            let rotationSpeed = 0.0015;
+
+            // Entrance effect
+            if (timeElapsed < 2000) {
+                rotationSpeed = 0.02 * (1 - timeElapsed / 2000) + 0.0015;
+            }
+
+            autoRotate += rotationSpeed;
+
+            const finalRotY = autoRotate + targetRotationY;
+            const finalRotX = targetRotationX;
+
+            particles.forEach(p => p.update(finalRotX, finalRotY, viewMode, timeElapsed));
+
+            // Draw Network Lines (Only visible when particles are close, i.e., Home mode)
+            if (viewMode === 'home') {
+                ctx.lineWidth = 0.8;
+
+                for (let i = 0; i < particles.length; i++) {
+                    const p1 = particles[i];
+                    if (p1.z < -p1.currentRadius * 0.5) continue;
+
+                    for (let j = i + 1; j < particles.length; j++) {
+                        const p2 = particles[j];
+                        if (p2.z < -p2.currentRadius * 0.5) continue;
+
+                        const dx = p1.x - p2.x;
+                        const dy = p1.y - p2.y;
+                        const distSq = dx * dx + dy * dy;
+
+                        const maxDist = 130 * 130;
+
+                        if (distSq < maxDist) {
+                            const alpha = (1 - distSq / maxDist);
+
+                            ctx.strokeStyle = `rgba(56, 189, 248, ${alpha * 0.5})`;
+                            ctx.beginPath();
+                            ctx.moveTo(p1.x, p1.y);
+                            ctx.lineTo(p2.x, p2.y);
+                            ctx.stroke();
+
+                            if (distSq < maxDist * 0.6) {
+                                for (let k = j + 1; k < Math.min(particles.length, j + 5); k++) {
+                                    const p3 = particles[k];
+                                    const d2 = (p2.x - p3.x) ** 2 + (p2.y - p3.y) ** 2;
+                                    const d3 = (p1.x - p3.x) ** 2 + (p1.y - p3.y) ** 2;
+
+                                    if (d2 < maxDist * 0.6 && d3 < maxDist * 0.6) {
+                                        ctx.fillStyle = `rgba(34, 211, 238, ${alpha * 0.08})`;
+                                        ctx.beginPath();
+                                        ctx.moveTo(p1.x, p1.y);
+                                        ctx.lineTo(p2.x, p2.y);
+                                        ctx.lineTo(p3.x, p3.y);
+                                        ctx.closePath();
+                                        ctx.fill();
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            
-            // 按面积排序，大的先画
-            triangles.sort((a, b) => b.area - a.area);
-            
-            // 绘制三角形
-            triangles.forEach((tri) => {
-                const intensity = 1 - (tri.avgDist / 180);
-                
-                // 使用固定的seed来决定三角形类型，避免频闪
-                const seedInt = Math.floor(tri.seed * 1000);
-                const isDark = seedInt % 7 === 0;
-                const isBright = seedInt % 11 === 0;
-                
-                if (isDark) {
-                    // 深色三角形（类似图片中的深青色区域）
-                    ctx.fillStyle = `rgba(6, 182, 212, ${0.12 * intensity})`;
-                    ctx.strokeStyle = `rgba(34, 211, 238, ${0.35 * intensity})`;
-                    ctx.lineWidth = 1.5;
-                } else if (isBright) {
-                    // 亮色三角形（类似图片中的亮青色区域）
-                    ctx.fillStyle = `rgba(56, 189, 248, ${0.09 * intensity})`;
-                    ctx.strokeStyle = `rgba(99, 102, 241, ${0.3 * intensity})`;
-                    ctx.lineWidth = 1.2;
-                } else {
-                    // 普通三角形
-                    ctx.fillStyle = `rgba(34, 211, 238, ${0.04 * intensity})`;
-                    ctx.strokeStyle = `rgba(99, 102, 241, ${0.15 * intensity})`;
-                    ctx.lineWidth = 0.6;
-                }
-                
-                ctx.beginPath();
-                ctx.moveTo(tri.points[0].x, tri.points[0].y);
-                ctx.lineTo(tri.points[1].x, tri.points[1].y);
-                ctx.lineTo(tri.points[2].x, tri.points[2].y);
-                ctx.closePath();
-                ctx.fill();
-                ctx.stroke();
-            });
 
-            particles.forEach(p => {
-                p.update();
-                p.draw();
-            });
+            particles.forEach(p => p.draw(ctx, viewMode));
 
             animationFrameId = requestAnimationFrame(animate);
         };
@@ -172,36 +202,26 @@ const ParticleNetwork = () => {
             resize();
             initParticles();
         });
-        
+        window.addEventListener('mousemove', onMouseMove);
+
         resize();
         initParticles();
         animate();
 
         return () => {
             window.removeEventListener('resize', resize);
+            window.removeEventListener('mousemove', onMouseMove);
             cancelAnimationFrame(animationFrameId);
         };
-    }, []);
+    }, [viewMode]);
 
     return (
-        <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: mounted ? 1 : 0 }}
-            transition={{ duration: 1.5, ease: "easeOut" }}
+        <motion.canvas
+            ref={canvasRef}
             className="fixed top-0 left-0 w-full h-screen z-0 pointer-events-none"
-        >
-            <motion.canvas 
-                ref={canvasRef} 
-                style={{ 
-                    opacity,
-                    scale, 
-                    filter: rawFilter 
-                }}
-                className="w-full h-full origin-center" 
-            />
-        </motion.div>
+            style={{ opacity: viewMode === 'chat' ? 1 : springOpacity }}
+        />
     );
 };
 
 export default ParticleNetwork;
-

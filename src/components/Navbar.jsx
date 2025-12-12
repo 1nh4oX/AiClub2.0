@@ -1,40 +1,44 @@
 import { motion } from 'framer-motion';
 
-const Navbar = () => {
+const Navbar = ({ onViewChange }) => {
+    const handleNavClick = (id) => {
+        onViewChange('home');
+        setTimeout(() => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    };
+
     return (
-        <motion.nav 
-            initial={{ y: -100 }}
-            animate={{ y: 0 }}
-            transition={{ duration: 0.8, ease: "easeOut" }}
-            className="fixed top-0 left-0 w-full z-40 px-6 md:px-12 py-5 flex justify-between items-center nav-glass"
-        >
-            <div className="flex items-center space-x-4">
+        <nav className="fixed top-0 left-0 w-full z-40 px-6 md:px-12 py-5 flex justify-between items-center nav-glass">
+            <div className="flex items-center space-x-4 cursor-pointer" onClick={() => onViewChange('home')}>
                 <div className="flex items-center space-x-3 tracking-wider relative select-none">
                     <span className="font-sans-cn font-bold text-white text-lg tracking-widest">南特金科</span>
                     <span className="w-px h-5 bg-white/20"></span>
                     <span className="font-tech font-medium text-cyan-400 text-sm tracking-widest">SAIF</span>
                 </div>
             </div>
-            
+
             <div className="hidden md:flex space-x-12 text-sm font-sans-cn font-medium text-gray-400">
                 {[
-                    {id: 'about', text: '学院概况'},
-                    {id: 'academics', text: '学术科研'},
-                    {id: 'faculty', text: '师资队伍'},
-                    {id: 'contact', text: '招生申请'}
+                    { name: '学院概况', id: 'section-0' },
+                    { name: '学术科研', id: 'section-1' },
+                    { name: '师资队伍', id: 'section-2' },
+                    { name: '招生申请', id: 'contact' }
                 ].map((item, index) => (
-                    <a 
+                    <button
                         key={index}
-                        href={`#${item.id}`} 
-                        className="relative hover:text-white transition-colors duration-300 py-2 cursor-pointer"
+                        onClick={() => handleNavClick(item.id)}
+                        className="relative hover:text-white transition-colors duration-300 py-2 cursor-pointer focus:outline-none"
                     >
-                        {item.text}
-                    </a>
+                        {item.name}
+                    </button>
                 ))}
             </div>
-        </motion.nav>
+        </nav>
     );
 };
 
 export default Navbar;
-
