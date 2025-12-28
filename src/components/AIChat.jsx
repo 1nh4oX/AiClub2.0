@@ -1,13 +1,23 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { COZE_CONFIG } from '../config/coze.js';
+import LytesLogo from './LytesLogo.jsx';
 
+/**
+ * AIChat - Lytes 智能助理界面
+ * 
+ * Lytes = Lychee + Nantes（荔枝 + 南特）
+ * 设计风格：仿 Gemini 现代简约风格
+ */
 const AIChat = ({ onBack }) => {
-    const [messages, setMessages] = useState([
-        { type: 'bot', text: '你好，我是金科院智能学术助理。无论是课程体系、深大南特合作细节，还是DeFi实验室的研究方向，我都能为你解答。' }
-    ]);
+    const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
-    const [isTyping, setIsTyping] = useState(false);
+    const [isThinking, setIsThinking] = useState(false);
+    const [isRetrying, setIsRetrying] = useState(false);  // 防止欢迎界面闪现
+    const [showToast, setShowToast] = useState('');
+    const [moreMenuIndex, setMoreMenuIndex] = useState(null);
     const scrollRef = useRef(null);
+    const inputRef = useRef(null);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -16,364 +26,449 @@ const AIChat = ({ onBack }) => {
                 behavior: 'smooth'
             });
         }
-    }, [messages, isTyping]);
+    }, [messages, isThinking]);
 
-    const handleSend = () => {
-        if (!input.trim()) return;
-        setMessages(prev => [...prev, { type: 'user', text: input }]);
-        setInput('');
-        setIsTyping(true);
-        setTimeout(() => {
-            const responses = [
-                "根据培养方案，大三学年你将有机会前往法国南特高等商学院交换，体验国际化的金融教育环境。",
-                "我们的金融科技实验室配备了彭博终端和高频交易模拟系统，让你能够在真实的市场环境中实践所学。",
-                "是的，所有的核心课程都采用全英或双语教学，以适应国际化需求。这将大大提升你的professional English能力。"
-            ];
-            setMessages(prev => [...prev, { type: 'bot', text: responses[Math.floor(Math.random() * responses.length)] }]);
-            setIsTyping(false);
-        }, 1500);
+    useEffect(() => {
+        inputRef.current?.focus();
+    }, []);
+
+    // 点击外部关闭菜单
+    useEffect(() => {
+        const handleClickOutside = () => setMoreMenuIndex(null);
+        if (moreMenuIndex !== null) {
+            document.addEventListener('click', handleClickOutside);
+            return () => document.removeEventListener('click', handleClickOutside);
+        }
+    }, [moreMenuIndex]);
+
+    // Toast 提示
+    const showToastMessage = (msg) => {
+        setShowToast(msg);
+        setTimeout(() => setShowToast(''), 2000);
     };
 
-    // 生成装饰性粒子
-    const particles = Array.from({ length: 40 }, (_, i) => ({
-        id: i,
-        x: Math.random() * 100,
-        y: Math.random() * 100,
-        size: Math.random() * 3 + 1,
-        delay: Math.random() * 5,
-        duration: Math.random() * 10 + 10
-    }));
+    // 发送消息
+    const handleSend = async (customMessage = null) => {
+        const messageToSend = customMessage || input.trim();
+        if (!messageToSend || isThinking) return;
+
+        const userMessage = messageToSend;
+        const currentMsgCount = messages.length;
+
+        setMessages(prev => [
+            ...prev,
+            { type: 'user', text: userMessage },
+            { type: 'bot', text: '', isStreaming: true }
+        ]);
+        setInput('');
+        setIsThinking(true);
+
+        const botMessageIndex = currentMsgCount + 1;
+        let fullResponse = '';
+
+        try {
+            const response = await fetch(`${COZE_CONFIG.serverURL}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: userMessage,
+                    userId: COZE_CONFIG.userId
+                })
+            });
+
+            if (!response.ok) throw new Error(`请求失败: ${response.status}`);
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const eventBlocks = buffer.split('\n\n');
+                buffer = eventBlocks.pop() || '';
+
+                for (const block of eventBlocks) {
+                    if (!block.trim()) continue;
+
+                    const lines = block.split('\n');
+                    let eventType = '', eventData = '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                        else if (line.startsWith('data:')) eventData = line.slice(5).trim();
+                    }
+
+                    if (!eventData || eventData === '[DONE]') continue;
+
+                    try {
+                        const data = JSON.parse(eventData);
+
+                        if (eventType === 'conversation.message.delta' && data.content) {
+                            fullResponse += data.content;
+                            setIsThinking(false);
+                            setMessages(prev => {
+                                const newMessages = [...prev];
+                                newMessages[botMessageIndex] = { type: 'bot', text: fullResponse, isStreaming: true };
+                                return newMessages;
+                            });
+                        } else if (eventType === 'conversation.message.completed' &&
+                            data.role === 'assistant' && data.type === 'answer' && data.content) {
+                            fullResponse = data.content;
+                            setMessages(prev => {
+                                const newMessages = [...prev];
+                                newMessages[botMessageIndex] = { type: 'bot', text: fullResponse, isStreaming: false };
+                                return newMessages;
+                            });
+                        }
+                    } catch (e) { }
+                }
+            }
+
+            // 标记流式结束
+            setMessages(prev => {
+                const newMessages = [...prev];
+                if (newMessages[botMessageIndex]) {
+                    newMessages[botMessageIndex].isStreaming = false;
+                }
+                return newMessages;
+            });
+
+            if (!fullResponse) {
+                setMessages(prev => {
+                    const newMessages = [...prev];
+                    newMessages[botMessageIndex] = { type: 'bot', text: '抱歉，我暂时无法回答这个问题。', isStreaming: false };
+                    return newMessages;
+                });
+            }
+
+        } catch (error) {
+            setMessages(prev => {
+                const newMessages = [...prev];
+                newMessages[botMessageIndex] = { type: 'bot', text: `连接出现问题: ${error.message}`, isStreaming: false };
+                return newMessages;
+            });
+        } finally {
+            setIsThinking(false);
+        }
+    };
+
+    // 反馈处理
+    const handleFeedback = async (type, msgIndex) => {
+        const userMsg = messages[msgIndex - 1]?.text || '';
+        const aiMsg = messages[msgIndex]?.text || '';
+
+        try {
+            await fetch(`${COZE_CONFIG.serverURL}/api/feedback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type, userMessage: userMsg, aiResponse: aiMsg })
+            });
+            showToastMessage('感谢您的反馈！');
+        } catch (e) {
+            showToastMessage('反馈发送失败');
+        }
+    };
+
+    // 重新回答 - 删除上一轮对话，重新发送同一个问题
+    const handleRetry = (msgIndex) => {
+        if (isThinking || isRetrying) return; // 防止重复点击
+
+        const userMsgIndex = msgIndex - 1;
+        if (userMsgIndex < 0) return;
+
+        const userMsg = messages[userMsgIndex];
+        if (!userMsg || userMsg.type !== 'user' || !userMsg.text) return;
+
+        const questionToRetry = userMsg.text;
+        console.log('🔄 重新回答:', questionToRetry);
+
+        // 设置重试状态
+        setIsRetrying(true);
+
+        // 使用 callback 形式确保获取最新状态并删除问答
+        setMessages(prevMessages => {
+            const newMessages = prevMessages.slice(0, userMsgIndex);
+            console.log('📝 删除后消息数:', newMessages.length);
+            return newMessages;
+        });
+
+        // 延迟后重新发送
+        setTimeout(() => {
+            setIsRetrying(false);
+            console.log('📤 重新发送问题');
+            handleSend(questionToRetry);
+        }, 100);
+    };
+
+    // 复制到剪贴板
+    const handleCopy = async (text) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            showToastMessage('已复制到剪贴板');
+        } catch (e) {
+            showToastMessage('复制失败');
+        }
+    };
+
+    // 互动按钮组件 - 始终显示，起到分割线作用
+    const ActionButtons = ({ msgIndex, text }) => (
+        <div className="flex items-center gap-1 mt-4 pt-3 border-t border-white/5">
+            {/* 点赞 */}
+            <button
+                onClick={() => handleFeedback('like', msgIndex)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                title="有帮助"
+            >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+                </svg>
+            </button>
+
+            {/* 踩 */}
+            <button
+                onClick={() => handleFeedback('dislike', msgIndex)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                title="没帮助"
+            >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3" />
+                </svg>
+            </button>
+
+            {/* 重新回答 */}
+            <button
+                onClick={() => handleRetry(msgIndex)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                title="重新回答"
+            >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M1 4v6h6M23 20v-6h-6" />
+                    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+                </svg>
+            </button>
+
+            {/* 复制 */}
+            <button
+                onClick={() => handleCopy(text)}
+                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                title="复制"
+            >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+            </button>
+
+            {/* 更多选项 */}
+            <div className="relative">
+                <button
+                    onClick={(e) => { e.stopPropagation(); setMoreMenuIndex(moreMenuIndex === msgIndex ? null : msgIndex); }}
+                    className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                    title="更多"
+                >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.5" />
+                        <circle cx="12" cy="12" r="1.5" />
+                        <circle cx="12" cy="19" r="1.5" />
+                    </svg>
+                </button>
+
+                {/* 弹出菜单 */}
+                <AnimatePresence>
+                    {moreMenuIndex === msgIndex && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                            className="absolute bottom-full right-0 mb-2 w-48 bg-[#1a1a24] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50"
+                        >
+                            {['核查回答', '听回复', '导出为文档', '报告问题'].map((item) => (
+                                <button
+                                    key={item}
+                                    onClick={() => { showToastMessage('功能暂未开发'); setMoreMenuIndex(null); }}
+                                    className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/5 transition-colors flex items-center gap-3"
+                                >
+                                    <span className="text-gray-500">•</span>
+                                    {item}
+                                </button>
+                            ))}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+            </div>
+        </div>
+    );
 
     return (
         <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 md:p-8"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex flex-col bg-[#0a0a0f]"
         >
-            {/* Animated background with gradient */}
-            <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="absolute inset-0 bg-gradient-to-br from-black/80 via-indigo-950/40 to-black/80 backdrop-blur-2xl"
-            />
-
-            {/* Decorative elements */}
-            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                <motion.div
-                    animate={{
-                        scale: [1, 1.2, 1],
-                        opacity: [0.3, 0.5, 0.3],
-                    }}
-                    transition={{
-                        duration: 8,
-                        repeat: Infinity,
-                        ease: "easeInOut"
-                    }}
-                    className="absolute -top-1/4 -right-1/4 w-1/2 h-1/2 bg-cyan-500/10 rounded-full blur-3xl"
-                />
-                <motion.div
-                    animate={{
-                        scale: [1, 1.3, 1],
-                        opacity: [0.2, 0.4, 0.2],
-                    }}
-                    transition={{
-                        duration: 10,
-                        repeat: Infinity,
-                        ease: "easeInOut",
-                        delay: 1
-                    }}
-                    className="absolute -bottom-1/4 -left-1/4 w-1/2 h-1/2 bg-indigo-500/10 rounded-full blur-3xl"
-                />
-
-                {/* 左侧装饰粒子 */}
-                {particles.slice(0, 20).map((particle) => (
+            {/* Toast 提示 */}
+            <AnimatePresence>
+                {showToast && (
                     <motion.div
-                        key={`left-${particle.id}`}
-                        className="absolute rounded-full bg-cyan-400/30"
-                        style={{
-                            left: `${particle.x * 0.15}%`,
-                            top: `${particle.y}%`,
-                            width: particle.size,
-                            height: particle.size,
-                        }}
-                        animate={{
-                            y: [0, -30, 0],
-                            opacity: [0.2, 0.6, 0.2],
-                            scale: [1, 1.2, 1],
-                        }}
-                        transition={{
-                            duration: particle.duration,
-                            repeat: Infinity,
-                            delay: particle.delay,
-                            ease: "easeInOut"
-                        }}
-                    />
-                ))}
+                        initial={{ opacity: 0, y: -20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        className="fixed top-20 left-1/2 -translate-x-1/2 px-4 py-2 bg-white/10 backdrop-blur-md border border-white/20 rounded-full text-sm text-white z-[100]"
+                    >
+                        {showToast}
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
-                {/* 右侧装饰粒子 */}
-                {particles.slice(20, 40).map((particle) => (
-                    <motion.div
-                        key={`right-${particle.id}`}
-                        className="absolute rounded-full bg-indigo-400/30"
-                        style={{
-                            right: `${particle.x * 0.15}%`,
-                            top: `${particle.y}%`,
-                            width: particle.size,
-                            height: particle.size,
-                        }}
-                        animate={{
-                            y: [0, -30, 0],
-                            opacity: [0.2, 0.6, 0.2],
-                            scale: [1, 1.2, 1],
-                        }}
-                        transition={{
-                            duration: particle.duration,
-                            repeat: Infinity,
-                            delay: particle.delay,
-                            ease: "easeInOut"
-                        }}
-                    />
-                ))}
+            {/* 顶部导航 */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+                <div className="flex items-center gap-3">
+                    <LytesLogo size={32} isThinking={false} />
+                    <div>
+                        <span className="text-white font-medium tracking-wide">Lytes</span>
+                        <span className="text-gray-500 text-xs ml-2">SAIF Intelligence</span>
+                    </div>
+                </div>
+                <button
+                    onClick={onBack}
+                    className="p-2 rounded-full hover:bg-white/10 transition-colors text-gray-400 hover:text-white"
+                >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                </button>
             </div>
 
-            <div className="w-full max-w-6xl h-full md:h-[90vh] glass-panel rounded-3xl overflow-hidden flex flex-col border border-white/10 shadow-2xl relative z-10">
-                {/* Header with enhanced styling */}
-                <div className="relative flex items-center justify-between p-6 border-b border-white/10 bg-gradient-to-r from-white/5 via-white/10 to-white/5">
-                    {/* Animated header accent line */}
-                    <motion.div
-                        className="absolute bottom-0 left-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent"
-                        initial={{ width: "0%" }}
-                        animate={{ width: "100%" }}
-                        transition={{ duration: 1, delay: 0.3 }}
-                    />
-
-                    <div className="flex items-center gap-4">
-                        {/* Enhanced AI avatar with pulse animation */}
+            {/* 消息区域 */}
+            <div className="flex-1 overflow-y-auto" ref={scrollRef}>
+                <div className="max-w-3xl mx-auto px-4 py-8">
+                    {/* 欢迎界面 - 仅在无消息且非重试状态时显示 */}
+                    {messages.length === 0 && !isThinking && !isRetrying && (
                         <motion.div
-                            className="relative w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/30"
-                            animate={{
-                                boxShadow: [
-                                    "0 0 20px rgba(6,182,212,0.3)",
-                                    "0 0 30px rgba(6,182,212,0.5)",
-                                    "0 0 20px rgba(6,182,212,0.3)",
-                                ]
-                            }}
-                            transition={{
-                                duration: 2,
-                                repeat: Infinity,
-                                ease: "easeInOut"
-                            }}
-                        >
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                                <path d="M12 2a10 10 0 1 0 10 10H12V2z" />
-                            </svg>
-                            {/* Pulse ring */}
-                            <motion.div
-                                className="absolute inset-0 rounded-full border-2 border-cyan-400"
-                                animate={{
-                                    scale: [1, 1.5],
-                                    opacity: [0.5, 0],
-                                }}
-                                transition={{
-                                    duration: 2,
-                                    repeat: Infinity,
-                                    ease: "easeOut"
-                                }}
-                            />
-                        </motion.div>
-
-                        <div>
-                            <h2 className="font-sans-cn font-bold text-xl text-white tracking-wide">SAIF Intelligence</h2>
-                            <div className="flex items-center gap-2">
-                                <motion.div
-                                    className="w-2 h-2 rounded-full bg-green-400"
-                                    animate={{
-                                        opacity: [1, 0.5, 1],
-                                    }}
-                                    transition={{
-                                        duration: 2,
-                                        repeat: Infinity,
-                                        ease: "easeInOut"
-                                    }}
-                                />
-                                <p className="text-xs text-cyan-400/90 font-tech tracking-wider uppercase">Online • AI Ready</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <motion.button
-                        onClick={onBack}
-                        whileHover={{ scale: 1.1, rotate: 90 }}
-                        whileTap={{ scale: 0.9 }}
-                        className="p-2.5 rounded-full bg-white/5 hover:bg-white/10 transition-colors group border border-white/10"
-                    >
-                        <svg className="w-5 h-5 text-gray-400 group-hover:text-white transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M18 6L6 18M6 6l12 12" />
-                        </svg>
-                    </motion.button>
-                </div>
-
-                {/* Messages area with enhanced styling */}
-                <div className="flex-1 overflow-y-auto p-8 space-y-6 bg-gradient-to-b from-transparent via-black/5 to-black/20" ref={scrollRef}>
-                    <AnimatePresence>
-                        {messages.map((msg, i) => (
-                            <motion.div
-                                initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                                animate={{ opacity: 1, y: 0, scale: 1 }}
-                                exit={{ opacity: 0, scale: 0.95 }}
-                                transition={{ duration: 0.3, delay: i * 0.1 }}
-                                key={i}
-                                className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
-                            >
-                                <div className={`group relative max-w-[75%] ${msg.type === 'user' ? 'order-1' : 'order-2'}`}>
-                                    {/* Message bubble with enhanced design */}
-                                    <motion.div
-                                        whileHover={{ scale: 1.02 }}
-                                        className={`relative p-6 rounded-2xl text-base leading-7 font-light tracking-wide shadow-xl backdrop-blur-md overflow-hidden ${msg.type === 'user'
-                                                ? 'bg-gradient-to-br from-indigo-600/30 via-indigo-600/20 to-purple-600/30 border border-indigo-400/40 text-white rounded-tr-sm'
-                                                : 'bg-gradient-to-br from-white/10 via-white/5 to-white/10 border border-white/10 text-gray-100 rounded-tl-sm'
-                                            }`}
-                                    >
-                                        {/* Shine effect on hover */}
-                                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-
-                                        <p className="relative z-10 font-sans-cn">{msg.text}</p>
-
-                                        {/* Timestamp */}
-                                        <div className={`mt-2 text-[10px] font-tech tracking-wider opacity-50 ${msg.type === 'user' ? 'text-right' : 'text-left'}`}>
-                                            {new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                                        </div>
-                                    </motion.div>
-
-                                    {/* Avatar indicator */}
-                                    {msg.type === 'bot' && (
-                                        <div className="absolute -left-3 top-0 w-6 h-6 rounded-full bg-gradient-to-br from-cyan-500 to-indigo-500 border-2 border-black/50 flex items-center justify-center">
-                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="white">
-                                                <path d="M12 2a10 10 0 1 0 10 10H12V2z" />
-                                            </svg>
-                                        </div>
-                                    )}
-                                </div>
-                            </motion.div>
-                        ))}
-                    </AnimatePresence>
-
-                    {/* Enhanced typing indicator */}
-                    {isTyping && (
-                        <motion.div
-                            initial={{ opacity: 0, y: 10 }}
+                            initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: 10 }}
-                            className="flex justify-start"
+                            className="text-center py-16"
                         >
-                            <div className="bg-gradient-to-r from-white/10 to-white/5 border border-white/10 px-6 py-4 rounded-2xl rounded-tl-sm flex gap-3 items-center backdrop-blur-md shadow-lg">
-                                <span className="text-xs text-gray-400 font-tech uppercase tracking-wider">AI 正在思考</span>
-                                <div className="flex gap-1.5">
-                                    {[0, 1, 2].map((i) => (
-                                        <motion.span
-                                            key={i}
-                                            className="w-2 h-2 bg-gradient-to-r from-cyan-400 to-indigo-400 rounded-full"
-                                            animate={{
-                                                y: [-3, 0, -3],
-                                                opacity: [1, 0.5, 1],
-                                            }}
-                                            transition={{
-                                                duration: 0.6,
-                                                repeat: Infinity,
-                                                delay: i * 0.15,
-                                                ease: "easeInOut"
-                                            }}
-                                        />
-                                    ))}
-                                </div>
+                            <LytesLogo size={80} isThinking={false} showGlow={true} />
+                            <h1 className="text-2xl font-light text-white mt-6 mb-2">你好，我是 Lytes</h1>
+                            <p className="text-gray-500 text-sm">金融科技学院智能助理，有什么可以帮助你的？</p>
+
+                            {/* 快捷提示 */}
+                            <div className="flex flex-wrap justify-center gap-2 mt-8 max-w-md mx-auto">
+                                {['课程设置', 'DeFi实验室', '南特交换项目', '就业前景'].map((hint) => (
+                                    <button
+                                        key={hint}
+                                        onClick={() => setInput(hint)}
+                                        className="px-4 py-2 text-sm text-gray-400 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 hover:border-white/20 transition-all"
+                                    >
+                                        {hint}
+                                    </button>
+                                ))}
                             </div>
                         </motion.div>
                     )}
-                </div>
 
-                {/* Enhanced input area */}
-                <div className="relative p-6 border-t border-white/10 bg-gradient-to-b from-black/20 to-black/40">
-                    {/* Decorative top line */}
-                    <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-400/50 to-transparent" />
+                    {/* 消息列表 */}
+                    <div className="space-y-6">
+                        <AnimatePresence>
+                            {messages.filter(msg => msg && (msg.text || msg.type === 'user')).map((msg, i) => {
+                                const actualIndex = messages.indexOf(msg);
+                                return (
+                                    <motion.div
+                                        key={actualIndex}
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ duration: 0.3 }}
+                                        className="group"
+                                    >
+                                        {msg.type === 'user' ? (
+                                            /* 用户消息 */
+                                            <div className="flex justify-end">
+                                                <div className="max-w-[80%] px-4 py-2.5 bg-white/10 rounded-2xl rounded-br-md text-white text-[15px]">
+                                                    {msg.text}
+                                                </div>
+                                            </div>
+                                        ) : msg.text ? (
+                                            /* AI 消息 */
+                                            <div className="flex gap-3">
+                                                <LytesLogo size={32} isThinking={false} isStreaming={msg.isStreaming} />
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap">
+                                                        {msg.text}
+                                                        {msg.isStreaming && (
+                                                            <span className="inline-block w-0.5 h-4 ml-0.5 bg-cyan-400 animate-pulse align-middle" />
+                                                        )}
+                                                    </div>
+                                                    {/* 互动按钮 - 仅在非流式时显示 */}
+                                                    {!msg.isStreaming && <ActionButtons msgIndex={actualIndex} text={msg.text} />}
+                                                </div>
+                                            </div>
+                                        ) : null}
+                                    </motion.div>
+                                );
+                            })}
+                        </AnimatePresence>
 
-                    <div className="relative max-w-4xl mx-auto">
-                        {/* Input wrapper with glow effect */}
-                        <motion.div
-                            className="relative rounded-full"
-                            whileFocus={{
-                                boxShadow: "0 0 0 3px rgba(6,182,212,0.2)",
-                            }}
-                        >
-                            <input
-                                type="text"
-                                value={input}
-                                onChange={(e) => setInput(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                                placeholder="输入您想了解的问题..."
-                                className="w-full bg-white/5 border border-white/20 rounded-full px-8 py-5 pr-16 text-base text-white focus:outline-none focus:border-cyan-400/60 focus:bg-white/10 transition-all placeholder-gray-500 shadow-inner font-sans-cn"
-                            />
-
-                            {/* Send button with fixed animation */}
-                            <motion.button
-                                onClick={handleSend}
-                                disabled={!input.trim()}
-                                whileHover={{ scale: 1.05 }}
-                                whileTap={{ scale: 0.95 }}
-                                className={`absolute right-2 top-1/2 -translate-y-1/2 p-3.5 rounded-full text-white transition-all ${input.trim()
-                                        ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:shadow-[0_0_20px_rgba(6,182,212,0.6)] cursor-pointer'
-                                        : 'bg-gray-700/50 cursor-not-allowed opacity-50'
-                                    }`}
+                        {/* 思考状态 */}
+                        {isThinking && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                className="flex gap-3"
                             >
-                                <svg
-                                    width="20"
-                                    height="20"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                >
-                                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                                </svg>
-                            </motion.button>
-                        </motion.div>
-
-                        {/* Quick suggestions */}
-                        <div className="mt-4 flex flex-wrap gap-2 justify-center">
-                            {['课程设置', 'DeFi实验室', '交换项目'].map((suggestion, i) => (
-                                <motion.button
-                                    key={suggestion}
-                                    initial={{ opacity: 0, y: 10 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: 0.5 + i * 0.1 }}
-                                    whileHover={{ scale: 1.05, y: -2 }}
-                                    whileTap={{ scale: 0.95 }}
-                                    onClick={() => setInput(suggestion)}
-                                    className="px-4 py-2 text-xs font-tech text-cyan-400/80 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400/40 rounded-full transition-all backdrop-blur-sm"
-                                >
-                                    {suggestion}
-                                </motion.button>
-                            ))}
-                        </div>
+                                <LytesLogo size={32} isThinking={true} />
+                                <div className="flex items-center gap-2 text-gray-400 text-sm pt-2">
+                                    <span>思考中</span>
+                                    <div className="flex gap-1">
+                                        {[0, 1, 2].map((i) => (
+                                            <motion.span
+                                                key={i}
+                                                className="w-1 h-1 bg-cyan-400 rounded-full"
+                                                animate={{ opacity: [0.3, 1, 0.3] }}
+                                                transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                                            />
+                                        ))}
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
                     </div>
+                </div>
+            </div>
 
-                    {/* Footer text with enhanced styling */}
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: 1 }}
-                        className="text-center mt-4"
-                    >
-                        <p className="text-[10px] text-gray-600 font-tech uppercase tracking-widest">
-                            Powered by
-                            <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-400 font-bold mx-1">
-                                Coze
-                            </span>
-                            & LLM Architecture
-                        </p>
-                    </motion.div>
+            {/* 底部输入区 */}
+            <div className="border-t border-white/5 bg-[#0a0a0f]/80 backdrop-blur-xl">
+                <div className="max-w-3xl mx-auto px-4 py-4">
+                    <div className="relative flex items-center">
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                            placeholder="向 Lytes 提问..."
+                            disabled={isThinking}
+                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 pr-14 text-white text-[15px] focus:outline-none focus:border-cyan-500/50 focus:bg-white/[0.07] transition-all placeholder-gray-500 disabled:opacity-50"
+                        />
+                        <button
+                            onClick={() => handleSend()}
+                            disabled={!input.trim() || isThinking}
+                            className={`absolute right-2 w-10 h-10 flex items-center justify-center rounded-xl transition-all ${input.trim() && !isThinking
+                                ? 'bg-gradient-to-r from-cyan-500 to-indigo-600 text-white hover:shadow-lg hover:shadow-cyan-500/25'
+                                : 'bg-white/5 text-gray-500'
+                                }`}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <p className="text-center text-xs text-gray-600 mt-3">
+                        © 2025 Lytes | Powered by SAIF & Coze
+                    </p>
                 </div>
             </div>
         </motion.div>

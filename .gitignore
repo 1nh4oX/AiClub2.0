@@ -28,3 +28,7 @@ dist-ssr
 *.sln
 *.sw?
 
+# Sensitive files - DO NOT COMMIT
+env.md
+private_key.pem
+feedback.json
