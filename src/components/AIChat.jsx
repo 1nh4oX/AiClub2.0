@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { COZE_CONFIG } from '../config/coze.js';
 import LytesLogo from './LytesLogo.jsx';
 
@@ -213,94 +215,110 @@ const AIChat = ({ onBack }) => {
         }
     };
 
-    // 互动按钮组件 - 始终显示，起到分割线作用
-    const ActionButtons = ({ msgIndex, text }) => (
-        <div className="flex items-center gap-1 mt-4 pt-3 border-t border-white/5">
-            {/* 点赞 */}
-            <button
-                onClick={() => handleFeedback('like', msgIndex)}
-                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
-                title="有帮助"
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
-                </svg>
-            </button>
+    // 计算最后一条 AI 消息的索引
+    const getLastBotMessageIndex = () => {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i]?.type === 'bot' && messages[i]?.text && !messages[i]?.isStreaming) {
+                return i;
+            }
+        }
+        return -1;
+    };
 
-            {/* 踩 */}
-            <button
-                onClick={() => handleFeedback('dislike', msgIndex)}
-                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
-                title="没帮助"
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3" />
-                </svg>
-            </button>
-
-            {/* 重新回答 */}
-            <button
-                onClick={() => handleRetry(msgIndex)}
-                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
-                title="重新回答"
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M1 4v6h6M23 20v-6h-6" />
-                    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
-                </svg>
-            </button>
-
-            {/* 复制 */}
-            <button
-                onClick={() => handleCopy(text)}
-                className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
-                title="复制"
-            >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-            </button>
-
-            {/* 更多选项 */}
-            <div className="relative">
-                <button
-                    onClick={(e) => { e.stopPropagation(); setMoreMenuIndex(moreMenuIndex === msgIndex ? null : msgIndex); }}
-                    className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
-                    title="更多"
+    // 互动按钮组件 - 最新消息始终显示，历史消息悬停整个消息区域显示
+    // 使用 CSS group-hover，悬停检测由父级 .group 容器控制
+    const ActionButtons = ({ msgIndex, text, isLatest }) => {
+        return (
+            <div className="mt-4 pt-3 border-t border-white/5">
+                <div
+                    className={`flex items-center gap-1 transition-opacity duration-200 ${isLatest ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                 >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <circle cx="12" cy="5" r="1.5" />
-                        <circle cx="12" cy="12" r="1.5" />
-                        <circle cx="12" cy="19" r="1.5" />
-                    </svg>
-                </button>
+                    {/* 点赞 */}
+                    <button
+                        onClick={() => handleFeedback('like', msgIndex)}
+                        className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                        title="有帮助"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+                        </svg>
+                    </button>
 
-                {/* 弹出菜单 */}
-                <AnimatePresence>
-                    {moreMenuIndex === msgIndex && (
-                        <motion.div
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            className="absolute bottom-full right-0 mb-2 w-48 bg-[#1a1a24] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50"
+                    {/* 踩 */}
+                    <button
+                        onClick={() => handleFeedback('dislike', msgIndex)}
+                        className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                        title="没帮助"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3" />
+                        </svg>
+                    </button>
+
+                    {/* 重新回答 */}
+                    <button
+                        onClick={() => handleRetry(msgIndex)}
+                        className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                        title="重新回答"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M1 4v6h6M23 20v-6h-6" />
+                            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" />
+                        </svg>
+                    </button>
+
+                    {/* 复制 */}
+                    <button
+                        onClick={() => handleCopy(text)}
+                        className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                        title="复制"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                        </svg>
+                    </button>
+
+                    {/* 更多选项 */}
+                    <div className="relative">
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setMoreMenuIndex(moreMenuIndex === msgIndex ? null : msgIndex); }}
+                            className="p-2 rounded-lg hover:bg-white/10 text-gray-500 hover:text-gray-300 transition-colors"
+                            title="更多"
                         >
-                            {['核查回答', '听回复', '导出为文档', '报告问题'].map((item) => (
-                                <button
-                                    key={item}
-                                    onClick={() => { showToastMessage('功能暂未开发'); setMoreMenuIndex(null); }}
-                                    className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/5 transition-colors flex items-center gap-3"
-                                >
-                                    <span className="text-gray-500">•</span>
-                                    {item}
-                                </button>
-                            ))}
-                        </motion.div>
-                    )}
-                </AnimatePresence>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <circle cx="12" cy="5" r="1.5" />
+                                <circle cx="12" cy="12" r="1.5" />
+                                <circle cx="12" cy="19" r="1.5" />
+                            </svg>
+                        </button>
+
+                        {/* 弹出菜单 */}
+                        {moreMenuIndex === msgIndex && (
+                            <div className="absolute bottom-full right-0 mb-2 w-48 bg-[#1a1a24] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50">
+                                {['核查回答', '听回复', '导出为文档', '报告问题'].map((item) => (
+                                    <button
+                                        key={item}
+                                        onClick={() => { showToastMessage('功能暂未开发'); setMoreMenuIndex(null); }}
+                                        className="w-full px-4 py-3 text-left text-sm text-gray-300 hover:bg-white/5 transition-colors flex items-center gap-3"
+                                    >
+                                        <span className="text-gray-500">•</span>
+                                        {item}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
-        </div>
-    );
+        );
+    };
+
+
+
+    // 判断是否为空状态（需要居中显示）
+    const isEmptyState = messages.length === 0 && !isThinking && !isRetrying;
+    const lastBotIndex = getLastBotMessageIndex();
 
     return (
         <motion.div
@@ -342,15 +360,21 @@ const AIChat = ({ onBack }) => {
                 </button>
             </div>
 
-            {/* 消息区域 */}
-            <div className="flex-1 overflow-y-auto" ref={scrollRef}>
-                <div className="max-w-3xl mx-auto px-4 py-8">
-                    {/* 欢迎界面 - 仅在无消息且非重试状态时显示 */}
-                    {messages.length === 0 && !isThinking && !isRetrying && (
+            {/* 条件渲染：空状态居中 vs 有消息时的标准布局 */}
+            <AnimatePresence mode="wait">
+                {isEmptyState ? (
+                    /* 空状态：欢迎界面 + 输入框居中 */
+                    <motion.div
+                        key="empty-state"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0, transition: { duration: 0.2 } }}
+                        className="flex-1 flex flex-col items-center justify-center px-4"
+                    >
                         <motion.div
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
-                            className="text-center py-16"
+                            className="text-center mb-8"
                         >
                             <LytesLogo size={80} isThinking={false} showGlow={true} />
                             <h1 className="text-2xl font-light text-white mt-6 mb-2">你好，我是 Lytes</h1>
@@ -369,108 +393,176 @@ const AIChat = ({ onBack }) => {
                                 ))}
                             </div>
                         </motion.div>
-                    )}
 
-                    {/* 消息列表 */}
-                    <div className="space-y-6">
-                        <AnimatePresence>
-                            {messages.filter(msg => msg && (msg.text || msg.type === 'user')).map((msg, i) => {
-                                const actualIndex = messages.indexOf(msg);
-                                return (
-                                    <motion.div
-                                        key={actualIndex}
-                                        initial={{ opacity: 0, y: 10 }}
-                                        animate={{ opacity: 1, y: 0 }}
-                                        transition={{ duration: 0.3 }}
-                                        className="group"
-                                    >
-                                        {msg.type === 'user' ? (
-                                            /* 用户消息 */
-                                            <div className="flex justify-end">
-                                                <div className="max-w-[80%] px-4 py-2.5 bg-white/10 rounded-2xl rounded-br-md text-white text-[15px]">
-                                                    {msg.text}
+                        {/* 居中的输入框 - 内联以避免组件重创建 */}
+                        <div className="w-full max-w-2xl mx-auto px-4">
+                            <div className="relative flex items-center">
+                                <input
+                                    ref={inputRef}
+                                    type="text"
+                                    value={input}
+                                    onChange={(e) => setInput(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                                    placeholder="向 Lytes 提问..."
+                                    disabled={isThinking}
+                                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 pr-14 text-white text-[15px] focus:outline-none focus:border-cyan-500/50 focus:bg-white/[0.07] transition-all placeholder-gray-500 disabled:opacity-50"
+                                />
+                                <button
+                                    onClick={() => handleSend()}
+                                    disabled={!input.trim() || isThinking}
+                                    className={`absolute right-2 w-10 h-10 flex items-center justify-center rounded-xl transition-all ${input.trim() && !isThinking
+                                        ? 'bg-gradient-to-r from-cyan-500 to-indigo-600 text-white hover:shadow-lg hover:shadow-cyan-500/25'
+                                        : 'bg-white/5 text-gray-500'
+                                        }`}
+                                >
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <p className="text-center text-xs text-gray-600 mt-3">
+                                © 2025 Lytes | Powered by SAIF & Coze
+                            </p>
+                        </div>
+                    </motion.div>
+                ) : (
+                    /* 有消息：标准布局 */
+                    <motion.div
+                        key="chat-state"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="flex-1 flex flex-col overflow-hidden"
+                    >
+                        {/* 消息区域 */}
+                        <div className="flex-1 overflow-y-auto" ref={scrollRef}>
+                            <div className="max-w-3xl mx-auto px-4 py-8">
+                                {/* 消息列表 */}
+                                <div className="space-y-6">
+                                    <AnimatePresence>
+                                        {messages.filter(msg => msg && (msg.text || msg.type === 'user')).map((msg, i) => {
+                                            const actualIndex = messages.indexOf(msg);
+                                            const isLatestBot = actualIndex === lastBotIndex;
+                                            return (
+                                                <motion.div
+                                                    key={actualIndex}
+                                                    initial={{ opacity: 0, y: 10 }}
+                                                    animate={{ opacity: 1, y: 0 }}
+                                                    transition={{ duration: 0.3 }}
+                                                    className="group"
+                                                >
+                                                    {msg.type === 'user' ? (
+                                                        /* 用户消息 */
+                                                        <div className="flex justify-end">
+                                                            <div className="max-w-[80%] px-4 py-2.5 bg-white/10 rounded-2xl rounded-br-md text-white text-[15px]">
+                                                                {msg.text}
+                                                            </div>
+                                                        </div>
+                                                    ) : msg.text ? (
+                                                        /* AI 消息 */
+                                                        <div className="flex gap-3">
+                                                            <LytesLogo size={32} isThinking={false} isStreaming={msg.isStreaming} />
+                                                            <div className="flex-1 min-w-0">
+                                                                <div className="text-gray-200 text-[15px] leading-relaxed prose prose-invert prose-sm max-w-none
+                                                                    prose-headings:text-white prose-headings:font-semibold prose-headings:mb-3 prose-headings:mt-4
+                                                                    prose-p:my-2 prose-p:leading-relaxed
+                                                                    prose-a:text-cyan-400 prose-a:no-underline hover:prose-a:underline
+                                                                    prose-strong:text-white prose-strong:font-semibold
+                                                                    prose-code:text-cyan-300 prose-code:bg-white/5 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-sm prose-code:before:content-none prose-code:after:content-none
+                                                                    prose-pre:bg-[#1a1a24] prose-pre:border prose-pre:border-white/10 prose-pre:rounded-lg prose-pre:p-4 prose-pre:my-3
+                                                                    prose-ul:my-2 prose-ul:list-disc prose-ul:pl-5 prose-ul:space-y-1
+                                                                    prose-ol:my-2 prose-ol:list-decimal prose-ol:pl-5 prose-ol:space-y-1
+                                                                    prose-li:text-gray-200 prose-li:my-1
+                                                                    prose-blockquote:border-l-4 prose-blockquote:border-cyan-500 prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-gray-300
+                                                                    prose-hr:border-white/10 prose-hr:my-4
+                                                                    prose-table:border-collapse prose-table:my-3
+                                                                    prose-th:border prose-th:border-white/10 prose-th:bg-white/5 prose-th:px-3 prose-th:py-2
+                                                                    prose-td:border prose-td:border-white/10 prose-td:px-3 prose-td:py-2
+                                                                ">
+                                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                                        {msg.text}
+                                                                    </ReactMarkdown>
+                                                                    {msg.isStreaming && (
+                                                                        <span className="inline-block w-0.5 h-4 ml-0.5 bg-cyan-400 animate-pulse align-middle" />
+                                                                    )}
+                                                                </div>
+                                                                {/* 互动按钮 - 仅在非流式时显示，传入 isLatest */}
+                                                                {!msg.isStreaming && <ActionButtons msgIndex={actualIndex} text={msg.text} isLatest={isLatestBot} />}
+                                                            </div>
+                                                        </div>
+                                                    ) : null}
+                                                </motion.div>
+                                            );
+                                        })}
+                                    </AnimatePresence>
+
+                                    {/* 思考状态 */}
+                                    {isThinking && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 10 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            className="flex gap-3"
+                                        >
+                                            <LytesLogo size={32} isThinking={true} />
+                                            <div className="flex items-center gap-2 text-gray-400 text-sm pt-2">
+                                                <span>思考中</span>
+                                                <div className="flex gap-1">
+                                                    {[0, 1, 2].map((i) => (
+                                                        <motion.span
+                                                            key={i}
+                                                            className="w-1 h-1 bg-cyan-400 rounded-full"
+                                                            animate={{ opacity: [0.3, 1, 0.3] }}
+                                                            transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                                                        />
+                                                    ))}
                                                 </div>
                                             </div>
-                                        ) : msg.text ? (
-                                            /* AI 消息 */
-                                            <div className="flex gap-3">
-                                                <LytesLogo size={32} isThinking={false} isStreaming={msg.isStreaming} />
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap">
-                                                        {msg.text}
-                                                        {msg.isStreaming && (
-                                                            <span className="inline-block w-0.5 h-4 ml-0.5 bg-cyan-400 animate-pulse align-middle" />
-                                                        )}
-                                                    </div>
-                                                    {/* 互动按钮 - 仅在非流式时显示 */}
-                                                    {!msg.isStreaming && <ActionButtons msgIndex={actualIndex} text={msg.text} />}
-                                                </div>
-                                            </div>
-                                        ) : null}
-                                    </motion.div>
-                                );
-                            })}
-                        </AnimatePresence>
-
-                        {/* 思考状态 */}
-                        {isThinking && (
-                            <motion.div
-                                initial={{ opacity: 0, y: 10 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                className="flex gap-3"
-                            >
-                                <LytesLogo size={32} isThinking={true} />
-                                <div className="flex items-center gap-2 text-gray-400 text-sm pt-2">
-                                    <span>思考中</span>
-                                    <div className="flex gap-1">
-                                        {[0, 1, 2].map((i) => (
-                                            <motion.span
-                                                key={i}
-                                                className="w-1 h-1 bg-cyan-400 rounded-full"
-                                                animate={{ opacity: [0.3, 1, 0.3] }}
-                                                transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
-                                            />
-                                        ))}
-                                    </div>
+                                        </motion.div>
+                                    )}
                                 </div>
-                            </motion.div>
-                        )}
-                    </div>
-                </div>
-            </div>
+                            </div>
+                        </div>
 
-            {/* 底部输入区 */}
-            <div className="border-t border-white/5 bg-[#0a0a0f]/80 backdrop-blur-xl">
-                <div className="max-w-3xl mx-auto px-4 py-4">
-                    <div className="relative flex items-center">
-                        <input
-                            ref={inputRef}
-                            type="text"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                            placeholder="向 Lytes 提问..."
-                            disabled={isThinking}
-                            className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 pr-14 text-white text-[15px] focus:outline-none focus:border-cyan-500/50 focus:bg-white/[0.07] transition-all placeholder-gray-500 disabled:opacity-50"
-                        />
-                        <button
-                            onClick={() => handleSend()}
-                            disabled={!input.trim() || isThinking}
-                            className={`absolute right-2 w-10 h-10 flex items-center justify-center rounded-xl transition-all ${input.trim() && !isThinking
-                                ? 'bg-gradient-to-r from-cyan-500 to-indigo-600 text-white hover:shadow-lg hover:shadow-cyan-500/25'
-                                : 'bg-white/5 text-gray-500'
-                                }`}
+                        {/* 底部输入区 */}
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.3 }}
+                            className="border-t border-white/5 bg-[#0a0a0f]/80 backdrop-blur-xl"
                         >
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-                            </svg>
-                        </button>
-                    </div>
-                    <p className="text-center text-xs text-gray-600 mt-3">
-                        © 2025 Lytes | Powered by SAIF & Coze
-                    </p>
-                </div>
-            </div>
+                            {/* 底部输入框 - 内联以避免组件重创建 */}
+                            <div className="max-w-3xl mx-auto px-4 py-4">
+                                <div className="relative flex items-center">
+                                    <input
+                                        ref={inputRef}
+                                        type="text"
+                                        value={input}
+                                        onChange={(e) => setInput(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                                        placeholder="向 Lytes 提问..."
+                                        disabled={isThinking}
+                                        className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-3.5 pr-14 text-white text-[15px] focus:outline-none focus:border-cyan-500/50 focus:bg-white/[0.07] transition-all placeholder-gray-500 disabled:opacity-50"
+                                    />
+                                    <button
+                                        onClick={() => handleSend()}
+                                        disabled={!input.trim() || isThinking}
+                                        className={`absolute right-2 w-10 h-10 flex items-center justify-center rounded-xl transition-all ${input.trim() && !isThinking
+                                            ? 'bg-gradient-to-r from-cyan-500 to-indigo-600 text-white hover:shadow-lg hover:shadow-cyan-500/25'
+                                            : 'bg-white/5 text-gray-500'
+                                            }`}
+                                    >
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                                        </svg>
+                                    </button>
+                                </div>
+                                <p className="text-center text-xs text-gray-600 mt-3">
+                                    © 2025 Lytes | Powered by SAIF & Coze
+                                </p>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </motion.div>
     );
 };

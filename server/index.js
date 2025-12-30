@@ -33,7 +33,11 @@ const PORT = process.env.PORT || 3001;
  * 如果不配置 CORS，浏览器会阻止跨域请求
  */
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],  // 允许的前端地址
+    origin: [
+        'http://localhost:5173', 'http://127.0.0.1:5173',
+        'http://localhost:5174', 'http://127.0.0.1:5174',
+        'http://localhost:5175', 'http://127.0.0.1:5175'
+    ],  // 允许的前端地址（Vite 可能使用备用端口）
     methods: ['GET', 'POST', 'OPTIONS'],                          // 允许的 HTTP 方法
     allowedHeaders: ['Content-Type', 'Authorization'],            // 允许的请求头
     credentials: true                                             // 允许携带凭证（cookies）
